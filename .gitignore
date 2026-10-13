@@ -1,0 +1,4 @@
+data/
+.npm-cache/
+.tmp/
+node_modules/
