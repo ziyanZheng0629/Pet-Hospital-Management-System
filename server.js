@@ -4,6 +4,9 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
 const root = __dirname;
+if(fs.existsSync(path.join(root,'.env')))process.loadEnvFile(path.join(root,'.env'));
+const profile=require('./pet-profile');
+const ai=require('./ai-provider')();
 fs.mkdirSync(process.env.DATA_DIR || path.join(root, 'data'), { recursive: true });
 const db = new DatabaseSync(path.join(process.env.DATA_DIR || path.join(root, 'data'), 'clinic.sqlite'));
 db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS records (id TEXT PRIMARY KEY, kind TEXT NOT NULL, tenant TEXT NOT NULL, branch TEXT NOT NULL, body TEXT NOT NULL);');
@@ -28,41 +31,41 @@ const roles=['院长','前台','医生','宠主'];
 const err=(code,message)=>Object.assign(new Error(message),{code});
 function check(cond,message,code=400){if(!cond)throw err(code,message)}
 function allowed(s,rs){check(rs.includes(s.role),'当前角色没有此操作权限',403)}
-function record(kind,id,s){const r=all(kind,s.tenant).find(x=>x.id===id); check(r,'记录不存在',404); if(s.role==='宠主')check(r.petId===s.petId || r.id===s.petId,'无权查看该记录',403);return r}
+function record(kind,id,s){const r=all(kind,s.tenant).find(x=>x.id===id); check(r,'记录不存在',404);if(s.branches && r.branch!=='all' && s.role!=='宠主')check(s.branches.includes(r.branch),'无权访问此门店记录',403); if(s.role==='宠主')check(r.petId===s.petId || r.id===s.petId,'无权查看该记录',403);return r}
 function audit(s,action){put('audit',s.tenant,'all',{id:crypto.randomUUID(),action,role:s.role,at:new Date().toISOString(),branch:'all'})}
 async function body(req){let b='';for await(const c of req){b+=c;check(b.length<100000,'请求过大',413)}try{return JSON.parse(b||'{}')}catch{throw err(400,'JSON 格式错误')}}
 function text(v,max=100){return String(v||'').trim().slice(0,max)}
 function dateValid(v){const d=new Date(v+'T00:00:00Z');return /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(d.getTime()) && d.toISOString().slice(0,10)===v}
-function transaction(fn){db.exec('BEGIN IMMEDIATE');try{const r=fn();db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}}
+let txDepth=0;
+function transaction(fn){const name='nested_'+txDepth;const nested=txDepth>0;db.exec(nested?'SAVEPOINT '+name:'BEGIN IMMEDIATE');txDepth++;try{const r=fn();db.exec(nested?'RELEASE '+name:'COMMIT');return r}catch(e){db.exec(nested?'ROLLBACK TO '+name:'ROLLBACK');if(nested)db.exec('RELEASE '+name);throw e}finally{txDepth--}}
+const domain=require('./domain')({all,put,check,allowed,record,today,text,dateValid,transaction,audit,branches,services,remove:id=>db.prepare('DELETE FROM records WHERE id=?').run(id)});
+const calls=require('./calls')({ai,all,put,updateProfile:(c,r)=>{const p=all('pet',c.tenant).find(p=>p.id===r.fields.petId&&p.branch===c.branch);if(!p)return;const fields={};for(const k of [...Object.keys(profile.labels),'ageMonths','weightStatus'])if(r.evidence[k]?.kind==='来电原话')fields[k]=r.fields[k];if(!Object.keys(fields).length)return;const entry={fields:{...p.intakeReview?.fields,...fields},at:new Date().toISOString(),source:'客户电话口述，待前台核对'};if(r.registration?.petId===p.id){Object.assign(p,fields);p.intakeStatus='待前台核对'}p.intakeReview=entry;p.missingFields=profile.missing(p);put('pet',c.tenant,p.branch,p)},createProfile:(c,f)=>transaction(()=>{const existing=all('pet',c.tenant).find(p=>p.branch===c.branch&&p.phone===c.phone&&p.name===f.petName&&p.species===f.species);if(existing)return existing;const ownerKey=crypto.createHash('sha256').update(c.tenant+':'+c.branch+':'+c.phone).digest('hex').slice(0,24);const owner=all('owner',c.tenant).find(o=>o.id==='owner-'+ownerKey)||put('owner',c.tenant,c.branch,{id:'owner-'+ownerKey,branch:c.branch,name:f.owner,phone:c.phone,source:'电话逐步登记',intakeStatus:'待前台核对'});return put('pet',c.tenant,c.branch,{id:c.tenant+'-call-pet-'+c.id,ownerId:owner.id,branch:c.branch,name:f.petName,owner:owner.name,phone:c.phone,species:f.species,breed:f.breed||'待补充',birthday:'',ageText:f.ageText||'',ageMonths:f.ageMonths??null,...Object.fromEntries(Object.keys(profile.labels).filter(k=>k in f).map(k=>[k,f[k]])),sex:f.sex||'待核实',weight:f.weight||null,weightStatus:f.weightStatus||'待核实',level:'普通会员',balanceCents:0,card:0,notes:'电话登记；年龄与免疫情况为客户口述，待前台核对。',source:'电话逐步登记',intakeStatus:'待前台核对',createdAt:new Date().toISOString()})}),check,allowed,branches,branchCheck:domain.branchCheck,createAppointment:(session,fields,key)=>transaction(()=>{const previous=all('appointment',session.tenant).find(a=>a.callRequestKey===key);if(previous){domain.branchCheck(session,previous.branch);return previous}const appointment=domain.handle('/api/appointments',fields,session,new URL('http://localhost'));appointment.callRequestKey=key;appointment.createdBy=session.name||session.role;appointment.confirmationMethod='前台人工确认';put('appointment',session.tenant,appointment.branch,appointment);return appointment}),dataDir:process.env.DATA_DIR||path.join(root,'data')});
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://localhost');
  const send=(v,status=200)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(v))};
  try{
- if(u.pathname==='/api/login' && req.method==='POST') {const b=await body(req);check(roles.includes(b.role),'角色无效');check(['demo','sandbox'].includes(b.tenant),'医院无效');const token=crypto.randomBytes(32).toString('hex');sessions.set(token,{role:b.role,tenant:b.tenant,petId:b.tenant+'-p1',expires:Date.now()+86400000});res.setHeader('Set-Cookie',`session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`);return send({ok:true})}
+ if(u.pathname==='/api/login' && req.method==='POST') {const b=await body(req);if(req.headers.origin)check(req.headers.origin===`http://${req.headers.host}`,'来源校验失败',403);const identity=domain.authenticate(b,req.socket.remoteAddress);const token=crypto.randomBytes(32).toString('hex');sessions.set(token,{...identity,expires:Date.now()+86400000});res.setHeader('Set-Cookie',`session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`);return send({ok:true})}
  if(u.pathname.startsWith('/api/')){
  const token=(req.headers.cookie||'').match(/(?:^|; )session=([a-f0-9]+)/)?.[1];const s=sessions.get(token);check(s && s.expires>Date.now(),'请先选择演示身份',401);
  if(!['GET','HEAD'].includes(req.method)){check(req.headers['x-demo-request']==='1','请求校验失败',403);const origin=req.headers.origin;if(origin)check(origin===`http://${req.headers.host}`,'来源校验失败',403)}
+ domain.refreshSession(s);
  const b=req.method==='GET'?{}:await body(req); const route=u.pathname;
+ const getRoutes=['/api/state','/api/reports','/api/calls','/api/calls/detail','/api/calls/ai/status'];
+ if(getRoutes.includes(route))check(req.method==='GET','请求方法不支持',405);else check(req.method==='POST','请求方法不支持',405);
+ const callResult=await calls.handle(route,b,s,u);if(callResult!==undefined)return send(callResult);
+ const run=()=>domain.handle(route,b,s,u);
+ const financial=['/api/members/recharge','/api/members/refund','/api/cards/buy','/api/cards/use','/api/cards/refund','/api/orders/pay','/api/orders/refund'];
+ const advanced=financial.includes(route)&&b.operationId?transaction(()=>{check(/^[a-zA-Z0-9-]{8,100}$/.test(b.operationId),'操作编号无效');const key=s.tenant+'-'+(s.employeeId||s.role)+'-'+b.operationId;const saved=all('operation',s.tenant).find(x=>x.id===key);const signature=JSON.stringify({route,b});if(saved){check(saved.signature===signature,'同一操作编号不可用于不同请求',409);return saved.result}const result=run();put('operation',s.tenant,'all',{id:key,branch:'all',signature,result});return result}):run();if(advanced!==undefined)return send(advanced,req.method==='POST'&&['/api/pets','/api/appointments','/api/visits'].includes(route)?201:200);
+ if(route==='/api/pets')domain.branchCheck(s,b.branch);
  if(route==='/api/logout'){sessions.delete(token);return send({ok:true})}
- if(route==='/api/state'){
- const branch=u.searchParams.get('branch')||'all';check(branch==='all'||branches.some(x=>x.id===branch),'门店无效');
- const list=k=>all(k,s.tenant).filter(r=>(branch==='all'||r.branch===branch||r.branch==='all') && (s.role!=='宠主'||r.id===s.petId||r.petId===s.petId));
- return send({session:{role:s.role,tenant:s.tenant},today:today(),branches,services,pets:list('pet'),appointments:list('appointment'),visits:list('visit'),orders:s.role==='医生'?[]:list('order'),stock:s.role==='宠主'?[]:list('stock'),messages:s.role==='医生'?[]:list('message'),settings:all('settings',s.tenant)[0],audit:s.role==='院长'?all('audit',s.tenant).slice(-20).reverse():[]})}
- if(route==='/api/pets'&&req.method==='POST'){
- allowed(s,['院长','前台']);check(text(b.name)&&text(b.owner),'宠物名称和宠主必填');check(/^1\d{10}$/.test(b.phone),'请输入 11 位手机号码');check(branches.some(x=>x.id===b.branch),'请选择门店');check(['猫','犬','其他'].includes(b.species),'物种无效');check(Number(b.weight)>0&&Number(b.weight)<200,'体重应在 0～200 kg 之间');
- const p=put('pet',s.tenant,b.branch,{id:crypto.randomUUID(),branch:b.branch,name:text(b.name),owner:text(b.owner),phone:b.phone,species:b.species,breed:text(b.breed),weight:Number(b.weight),birthday:text(b.birthday),sex:text(b.sex),notes:text(b.notes,1000),level:'普通会员',card:0});audit(s,'新建宠物档案：'+p.name);return send(p,201)}
- if(route==='/api/appointments'&&req.method==='POST'){
- allowed(s,roles);const p=record('pet',b.petId,s);check(dateValid(b.date)&&b.date>=today(),'预约日期不能早于今天');check(/^([01]\d|2[0-3]):[0-5]\d$/.test(b.time),'时间无效');check(['林医生','陈医生','张医生'].includes(b.doctor),'请选择医生');check(text(b.reason),'请填写预约事项');
- check(!all('appointment',s.tenant).some(a=>a.branch===p.branch&&a.date===b.date&&a.time===b.time&&a.doctor===b.doctor&&a.status!=='已取消'),'该医生此时段已有预约，请调整时间',409);
- const a=put('appointment',s.tenant,p.branch,{id:crypto.randomUUID(),petId:p.id,branch:p.branch,date:b.date,time:b.time,doctor:b.doctor,reason:text(b.reason),status:'已预约'});audit(s,'创建预约：'+p.name);return send(a,201)}
+ if(route==='/api/pets'||route==='/api/pets/update'){
+ allowed(s,['院长','前台']);const old=route.endsWith('/update')?record('pet',b.id,s):null;const input=old?{...old,...b,branch:old.branch}:b;
+ check(text(input.name)&&text(input.owner),'宠物名称和宠主必填');check(/^1\d{10}$/.test(input.phone),'请输入 11 位手机号码');check(branches.some(x=>x.id===input.branch),'请选择门店');domain.branchCheck(s,input.branch);check(['猫','犬','其他'].includes(input.species),'物种无效');
+ if(old?.intakeReview)check(b.profileVerified===true||b.profileVerified==='on','请逐项核对电话补充资料并勾选确认后保存');const details=profile.clean(input,check);const p={...(old||{id:crypto.randomUUID(),level:'普通会员',card:0,balanceCents:0}),...details,branch:input.branch,name:text(input.name),owner:text(input.owner),phone:input.phone,species:input.species};
+ if(b.profileVerified===true||b.profileVerified==='on'){delete p.intakeReview;p.intakeStatus='已核对';p.verifiedAt=new Date().toISOString();p.verifiedBy=s.name||s.role}else if(old?.intakeReview)p.intakeStatus='待前台核对';
+ if(b.birthday!==undefined||b.ageText!==undefined){p.ageMonths=null;if(p.birthday)p.ageText=''}p.missingFields=profile.missing(p);put('pet',s.tenant,p.branch,p);audit(s,(old?'更新':'新建')+'宠物档案：'+p.name);return send(p,old?200:201)}
  if(route==='/api/appointments/status'&&req.method==='POST'){
  const a=record('appointment',b.id,s);const next={'已预约':['待接诊','已取消'],'待接诊':['诊疗中','已取消']};check(next[a.status]?.includes(b.status),'该状态不能执行此操作',409);if(s.role==='宠主')check(b.status==='已取消','宠主只能取消预约',403);else allowed(s,['院长','前台','医生']);a.status=b.status;put('appointment',s.tenant,a.branch,a);audit(s,'预约状态：'+a.status);return send(a)}
- if(route==='/api/visits'&&req.method==='POST'){
- allowed(s,['院长','医生']);const a=record('appointment',b.appointmentId,s);check(a.status==='诊疗中','请先开始接诊',409);check(text(b.complaint)&&text(b.diagnosis),'主诉和诊疗记录必填');check(Array.isArray(b.services)&&b.services.length>0,'至少选择一个服务项目');check(b.services.length<=20,'项目过多');const items=b.services.map(id=>{const x=services.find(i=>i.id===id);check(x,'无效收费项目');return {...x}});check(new Set(b.services).size===b.services.length,'服务项目重复');
- return send(transaction(()=>{const v=put('visit',s.tenant,a.branch,{id:crypto.randomUUID(),appointmentId:a.id,petId:a.petId,branch:a.branch,doctor:a.doctor,date:today(),complaint:text(b.complaint,2000),diagnosis:text(b.diagnosis,2000),advice:text(b.advice,2000),items});put('order',s.tenant,a.branch,{id:crypto.randomUUID(),visitId:v.id,petId:a.petId,branch:a.branch,date:today(),items,total:items.reduce((n,x)=>n+x.price,0),status:'待收费'});a.status='待收费';put('appointment',s.tenant,a.branch,a);audit(s,'保存病历并开单');return v}),201)}
- if(route==='/api/orders/pay'&&req.method==='POST'){
- allowed(s,['院长','前台']);const o=record('order',b.id,s);check(o.status==='待收费','订单已经结算',409);check(['微信（模拟）','现金（模拟）','支付宝（模拟）'].includes(b.method),'支付方式无效');return send(transaction(()=>{o.status='已支付';o.method=b.method;o.paidAt=new Date().toISOString();put('order',s.tenant,o.branch,o);const v=record('visit',o.visitId,s),a=record('appointment',v.appointmentId,s);a.status='已完成';put('appointment',s.tenant,a.branch,a);audit(s,'模拟收款 ¥'+o.total);return o}))}
- if(route==='/api/cards/use'&&req.method==='POST'){allowed(s,['院长','前台']);const p=record('pet',b.id,s);check(p.card>0,'计次卡余额不足',409);p.card--;put('pet',s.tenant,p.branch,p);audit(s,'核销计次卡：'+p.name);return send(p)}
  if(route==='/api/stock'&&req.method==='POST'){allowed(s,['院长','前台']);const r=record('stock',b.id,s);const delta=Number(b.delta);check(Number.isInteger(delta)&&delta!==0&&Math.abs(delta)<=10000,'数量应为非零整数');check(r.quantity+delta>=0,'库存不足',409);r.quantity+=delta;put('stock',s.tenant,r.branch,r);audit(s,`${r.name} 库存调整 ${delta}`);return send(r)}
  if(route==='/api/messages'&&req.method==='POST'){allowed(s,['院长','前台']);const p=record('pet',b.petId,s);check(text(b.content),'提醒内容必填');return send(put('message',s.tenant,p.branch,{id:crypto.randomUUID(),branch:p.branch,petId:p.id,title:text(b.title)||'到店提醒',content:text(b.content,500),type:'短信',status:'待处理'}),201)}
  if(route==='/api/messages/send'&&req.method==='POST'){allowed(s,['院长','前台']);const m=record('message',b.id,s);check(m.status==='待处理','该提醒已处理',409);m.status='模拟已发送';m.sentAt=new Date().toISOString();put('message',s.tenant,m.branch,m);audit(s,'模拟发送提醒');return send(m)}
@@ -70,8 +73,8 @@ const server=http.createServer(async(req,res)=>{
  throw err(404,'接口不存在');
  }
  if(req.method!=='GET'&&req.method!=='HEAD')throw err(405,'请求方法不支持');
- const files={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/styles.css':'styles.css'};check(files[u.pathname],'页面不存在',404);
- const types={'.html':'text/html','.js':'application/javascript','.css':'text/css'};res.writeHead(200,{'Content-Type':types[path.extname(files[u.pathname])]+'; charset=utf-8','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"});res.end(fs.readFileSync(path.join(root,'public',files[u.pathname])));
+ const files={'/':'index.html','/index.html':'index.html','/app.js':'app.js','/profiles.js':'profiles.js','/advanced.js':'advanced.js','/styles.css':'styles.css','/calls.js':'calls.js','/booking.js':'booking.js','/phone.js':'phone.js','/voice-demo.wav':'voice-demo.wav'};if(/^\/voice\/[a-zA-Z0-9-]+\.(mp3|json)$/.test(u.pathname)&&fs.existsSync(path.join(root,'public',u.pathname.slice(1))))files[u.pathname]=u.pathname.slice(1);check(files[u.pathname],'页面不存在',404);
+ const types={'.html':'text/html','.js':'application/javascript','.css':'text/css','.wav':'audio/wav','.mp3':'audio/mpeg','.json':'application/json'};res.writeHead(200,{'Content-Type':types[path.extname(files[u.pathname])]+'; charset=utf-8','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"});res.end(fs.readFileSync(path.join(root,'public',files[u.pathname])));
  }catch(e){send({error:e.code?e.message:'服务器处理失败'},e.code||500);if(!e.code)console.error(e)}
 });
-server.listen(Number(process.env.PORT)||4318,'127.0.0.1',()=>console.log(`讯德 3.0 Demo: http://127.0.0.1:${server.address().port}`));
+server.listen(Number(process.env.PORT)||4318,'127.0.0.1',()=>console.log(`zzy Demo: http://127.0.0.1:${server.address().port}`));

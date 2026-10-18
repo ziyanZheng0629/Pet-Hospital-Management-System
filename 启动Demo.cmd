@@ -7,7 +7,7 @@ if errorlevel 1 (
  pause
  exit /b 1
 )
-echo 讯德 3.0 正在启动。浏览器访问 http://127.0.0.1:4318
+echo zzy 正在启动。浏览器访问 http://127.0.0.1:4318
 echo 保持此窗口打开。按 Ctrl+C 停止服务。
 node server.js
 pause

@@ -2,6 +2,9 @@ data/
 .npm-cache/
 .tmp/
 node_modules/
+.env
+.env.*
+!.env.example
 # Compiled class file
 *.class
 
@@ -26,3 +29,12 @@ node_modules/
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# 本地交付包、预览与私人配置
+交付/
+预览/
+*.sqlite
+*.sqlite-*
+*.db
+*.pem
+*.key

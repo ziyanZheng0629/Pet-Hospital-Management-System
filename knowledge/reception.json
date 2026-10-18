@@ -1,0 +1,59 @@
+[
+  {
+    "code": "reception",
+    "title": "AAHA 团队接待与问询训练 · 摘要",
+    "content": "前台应先倾听客户诉求，再用清楚的问题逐步了解情况；确认已听到的信息，避免让客户一次处理太多内容。电话流程每次只补问一个必要信息，已知档案不重复询问。后两条为本项目对电话场景的实现规则。",
+    "url": "https://www.aaha.org/resources/2021-aaha-aafp-feline-life-stage-guidelines/vet-team-pet-owner-collaboration/",
+    "publisher": "AAHA / AAFP",
+    "kind": "公开指南摘要 + 院内流程",
+    "version": "1",
+    "reviewedAt": "2026-10-18"
+  },
+  {
+    "code": "vaccine-intake",
+    "title": "AAHA 猫疫苗评估因素 · 摘要",
+    "content": "猫的疫苗评估需要考虑年龄、当前健康情况和既往接种经历。接待先采集这些信息，具体能否接种、疫苗种类及时间由兽医结合检查确认。",
+    "url": "https://www.aaha.org/resources/2020-aahaaafp-feline-vaccination-guidelines/vaccination-principles/",
+    "publisher": "AAHA / AAFP",
+    "kind": "公开指南摘要",
+    "version": "1",
+    "reviewedAt": "2026-10-18"
+  },
+  {
+    "code": "vaccine-health",
+    "title": "AAHA 疫苗接种前健康评估 · 摘要",
+    "content": "疫苗接种应以健康评估为前提。出现不适、正在治疗等情况时，电话前台记录情况并交兽医评估，不承诺当天可以接种。接种记录不详时，应携带已有记录交医生核对。",
+    "url": "https://www.aaha.org/resources/2020-aahaaafp-feline-vaccination-guidelines/faqs-5/",
+    "publisher": "AAHA / AAFP",
+    "kind": "公开指南摘要 + 接待规则",
+    "version": "1",
+    "reviewedAt": "2026-10-18"
+  },
+  {
+    "code": "groom-intake",
+    "title": "美容预约接待规则",
+    "content": "根据来电手机号匹配本门店宠主与宠物。美容先登记到店意向，具体美容内容、耗时和费用到店由美容师确认。标准服务时长不能当作实际美容时长向客户承诺。",
+    "publisher": "zzy 院内流程（用户指定）",
+    "kind": "院内接待规则",
+    "version": "1",
+    "reviewedAt": "2026-10-18"
+  },
+  {
+    "code": "profile-intake",
+    "title": "新客逐步建档规则",
+    "content": "同一号码多只宠物时先确认本次服务哪一只。未找到档案时逐步询问宠主称呼、宠物名字和种类，使用来电号码创建相互关联的宠主与宠物档案。资料标为电话登记待前台核对，不推测生日、品种、体重或免疫记录。预约意向最终由前台人工确认。",
+    "publisher": "zzy 院内流程（用户指定）",
+    "kind": "院内接待规则",
+    "version": "1",
+    "reviewedAt": "2026-10-18"
+  },
+  {
+    "code": "profile-clinical",
+    "title": "医院常用建档字段与口述核对",
+    "content": "电话只追加询问品种、毛色、体重、性别、过敏史五项，已有资料不重复问；未知明确标待核实。体重区分公斤与斤，口述数据待到店称重。疫苗咨询仍先问年龄、近期健康和接种经历，新客询问宠主与宠物身份，最后问到店意向。绝育、驱虫、病史、用药、饮食等其他字段留给前台按需补录，不在电话逐项追问。已有档案的电话补充交前台核对后更新，预约必须人工确认。",
+    "publisher": "zzy 院内建档流程（用户指定）",
+    "kind": "院内接待规则",
+    "version": "2",
+    "reviewedAt": "2026-10-18"
+  }
+]

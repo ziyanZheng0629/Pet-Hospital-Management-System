@@ -1,0 +1,8 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const http=require('node:http');
+const createAI=require('../ai-provider');
+test('真实HTTP适配路径：只接受来源原文，伪造来源或新增事实会回退',async()=>{
+ let bad=false,requests=0;const server=http.createServer(async(req,res)=>{let body='';for await(const chunk of req)body+=chunk;const data=JSON.parse(body);assert.equal(req.headers.authorization,'Bearer local-test-secret');assert.equal(data.response_format.type,'json_object');assert.ok(!body.includes('13800001111'));requests++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({reply:'门诊标准价50元，最终以收费单为准。',citations:[{sourceId:'kb-price',quote:bad?'凭空承诺全免费':'门诊标准价50元。'}]})}}]}))});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));try{const provider=createAI({enabled:true,endpoint:`http://127.0.0.1:${server.address().port}/v1/chat/completions`,model:'mock-model',key:'local-test-secret'});const call={summary:{risk:'普通'},turns:[{role:'caller',text:'13800001111咨询价格'}]};const turn={text:'规则回复',intent:'价格与时长',sources:[{id:'kb-price',title:'报价',content:'门诊标准价50元。最终以收费单为准。'}]};const good=await provider.generate(call,turn);assert.equal(good.provider.mode,'ai');assert.ok(good.text.includes('50元'));bad=true;const rejected=await provider.generate(call,turn);assert.equal(rejected.provider.mode,'rules');assert.equal(rejected.text,'规则回复');assert.equal(requests,2);const guarded=await provider.generate({...call,summary:{risk:'紧急'}},turn);assert.equal(guarded.provider.mode,'rules');assert.equal(requests,2);assert.equal(provider.status().key,undefined)}finally{await new Promise(r=>server.close(r))}
+});
